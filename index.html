@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Turn-by-Turn Navigation (OSRM Directions)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!-- Leaflet CSS/JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+
+  <style>
+    html, body {height: 100%; margin: 0; padding: 0;}
+    body {overflow: hidden;}
+    #map {height: 100vh; width: 100vw;}
+    #top-controls {
+      position: absolute; z-index: 1001; left: 10px; top: 10px;
+      width: calc(100vw - 20px); max-width: 400px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    #building-select {
+      padding: 10px; background: white; border-radius: 6px; border: 1px solid #aaa;
+      font-size: 1rem; max-width: 100%;
+    }
+    #start-nav-btn {
+      padding: 12px 0; background: #007bff; color: white; border: none; border-radius: 4px;
+      font-size: 1rem; font-weight: bold; cursor: pointer; width: 100%;
+      box-shadow: 0 2px 8px #00000020;
+      transition: background 0.2s;
+      display: block;
+    }
+    #start-nav-btn:disabled {
+      background: #b0b0b0; cursor: not-allowed;
+    }
+    #instructions {
+      display: none !important;
+    }
+    @media (max-width: 600px) {
+      #top-controls { max-width: 95vw; }
+    }
+  </style>
+</head>
+<body>
+  <div id="top-controls">
+    <select id="building-select">
+      <option disabled selected value="">Select a Destination</option>
+      <option value="9.649295884532481,123.86859277164733">Bates Building</option>
+      <option value="9.648274323006579,123.867375894612">Elementary Building</option>
+      <option value="9.649258920201365,123.86913815071111">Senior High School Building</option>
+      <option value="9.6501393425521,123.86784628406689">College of Art Sciences Building</option>
+      <option value="9.648836069141659,123.8671386907348">Junior High School Building</option>
+    </select>
+    <button id="start-nav-btn" disabled>START NAVIGATING</button>
+  </div>
+  <div id="map"></div>
+  <div id="instructions"></div>
+  <script>
+    let destLatLng = null, destMarker = null, userMarker = null, watchId = null;
+    let routingControl = null;
+    let navStarted = false;
+    let currentDestinationLabel = "";
+
+    // Center and follow the user continuously when navigating
+    let followUser = true;
+
+    const map = L.map('map', {
+      zoomControl: true,
+      attributionControl: false,
+      tap: false,
+      dragging: true,
+      scrollWheelZoom: true,
+      doubleClickZoom: true,
+      boxZoom: true,
+      keyboard: true
+    }).setView([9.649, 123.868], 17);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(map);
+
+    function createRoutingControl(startLatLng, endLatLng) {
+      if (routingControl) {
+        map.removeControl(routingControl);
+        routingControl = null;
+      }
+      routingControl = L.Routing.control({
+        waypoints: [
+          L.latLng(startLatLng),
+          L.latLng(endLatLng)
+        ],
+        router: L.Routing.osrmv1({serviceUrl: 'https://router.project-osrm.org/route/v1'}),
+        lineOptions: {
+          styles: [{ color: 'blue', opacity: 0.8, weight: 6 }]
+        },
+        show: false,
+        collapsible: false,
+        addWaypoints: false,
+        draggableWaypoints: false,
+        fitSelectedRoutes: true,
+        createMarker: function(i, wp, nWps) {
+          if (i === 0) {
+            return null; // Don't show a marker for the user; we'll show our own
+          }
+          if (i === nWps - 1) {
+            return L.marker(wp.latLng, {icon: L.icon({
+              iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
+              iconAnchor: [13,41],
+              iconSize: [25,41],
+              popupAnchor: [0,-35]
+            })}).bindPopup(currentDestinationLabel || "Destination");
+          }
+          return null;
+        }
+      }).addTo(map);
+    }
+
+    function getDestinationLabel(val) {
+      const sel = document.getElementById('building-select');
+      return sel.options[sel.selectedIndex].text || "Destination";
+    }
+
+    document.getElementById('building-select').addEventListener('change', function () {
+      if (!this.value) return;
+      destLatLng = this.value.split(',').map(Number);
+      currentDestinationLabel = getDestinationLabel(this.value);
+
+      if (destMarker) map.removeLayer(destMarker);
+      destMarker = L.marker(destLatLng, {icon: L.icon({
+        iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
+        iconAnchor: [13,41],
+        iconSize: [25,41],
+        popupAnchor: [0,-35]
+      })}).addTo(map).bindPopup(currentDestinationLabel).openPopup();
+
+      document.getElementById('start-nav-btn').disabled = false;
+      navStarted = false;
+
+      map.setView(destLatLng, 17);
+    });
+
+    document.getElementById('start-nav-btn').addEventListener('click', function () {
+      if (!destLatLng) return;
+      navStarted = true;
+      this.blur();
+
+      if (routingControl) { map.removeControl(routingControl); routingControl = null; }
+      if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+      if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+
+      followUser = true;
+
+      if (navigator.geolocation) {
+        watchId = navigator.geolocation.watchPosition(function(position) {
+          const userLatLng = [position.coords.latitude, position.coords.longitude];
+
+          // Update or create user marker
+          if (userMarker) userMarker.setLatLng(userLatLng);
+          else userMarker = L.marker(userLatLng, {
+            icon: L.icon({
+              iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+              iconSize: [25, 41], iconAnchor: [13, 41], popupAnchor: [0, -35]
+            })
+          }).addTo(map).bindPopup("You are here");
+
+          // Always recenter map on user during navigation
+          if (followUser) {
+            map.setView(userLatLng, map.getZoom());
+          }
+
+          // Always recalculate route from current location
+          createRoutingControl(userLatLng, destLatLng);
+        }, function(error) {
+          // Ignore errors for minimal UI
+        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
+      }
+    });
+
+    // Allow user to pan/zoom, but if they move the map, stop auto-follow until navigation is restarted
+    map.on('movestart', function() {
+      if (navStarted) followUser = false;
+    });
+
+    // Always allow manual zooming/panning
+    map.touchZoom.enable();
+    map.scrollWheelZoom.enable();
+    map.doubleClickZoom.enable();
+    map.boxZoom.enable();
+    map.keyboard.enable();
+    if (map.tap) map.tap.enable();
+    map.dragging.enable();
+
+    if ('ontouchstart' in window) {
+      map.tap = true;
+    }
+  </script>
+</body>
+</html>
