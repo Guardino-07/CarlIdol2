@@ -61,10 +61,30 @@
     let routingControl = null;
     let navStarted = false;
     let currentDestinationLabel = "";
-
-    // Center and follow the user continuously when navigating
+    let lastUserLatLng = null;
+    let lastDestLatLng = null;
     let followUser = true;
+    let manualViewChange = false;
 
+    // Only update route if user moves significantly (meters)
+    const MIN_ROUTE_UPDATE_METERS = 7;
+
+    // Helper to compute distance in meters between two latlngs
+    function getDistanceMeters(a, b) {
+      function toRad(x) { return x * Math.PI / 180; }
+      const lat1 = a[0], lon1 = a[1], lat2 = b[0], lon2 = b[1];
+      const R = 6378137; // Earth radius
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const la1 = toRad(lat1);
+      const la2 = toRad(lat2);
+      const aHarv = Math.sin(dLat/2)*Math.sin(dLat/2) +
+                    Math.sin(dLon/2)*Math.sin(dLon/2)*Math.cos(la1)*Math.cos(la2);
+      const c = 2 * Math.atan2(Math.sqrt(aHarv), Math.sqrt(1-aHarv));
+      return R * c;
+    }
+
+    // Initialize map
     const map = L.map('map', {
       zoomControl: true,
       attributionControl: false,
@@ -78,10 +98,21 @@
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 19,
+      maxZoom: 22,
     }).addTo(map);
 
     function createRoutingControl(startLatLng, endLatLng) {
+      // Do not update if coords are the same (prevent route jumpiness)
+      if (
+        lastUserLatLng && lastDestLatLng &&
+        getDistanceMeters(lastUserLatLng, startLatLng) < MIN_ROUTE_UPDATE_METERS &&
+        getDistanceMeters(lastDestLatLng, endLatLng) < MIN_ROUTE_UPDATE_METERS
+      ) {
+        return;
+      }
+      lastUserLatLng = startLatLng.slice();
+      lastDestLatLng = endLatLng.slice();
+
       if (routingControl) {
         map.removeControl(routingControl);
         routingControl = null;
@@ -99,11 +130,9 @@
         collapsible: false,
         addWaypoints: false,
         draggableWaypoints: false,
-        fitSelectedRoutes: true,
+        fitSelectedRoutes: false, // <-- Don't force map to fit route after each update
         createMarker: function(i, wp, nWps) {
-          if (i === 0) {
-            return null; // Don't show a marker for the user; we'll show our own
-          }
+          if (i === 0) return null;
           if (i === nWps - 1) {
             return L.marker(wp.latLng, {icon: L.icon({
               iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -139,6 +168,7 @@
       navStarted = false;
 
       map.setView(destLatLng, 17);
+      manualViewChange = false;
     });
 
     document.getElementById('start-nav-btn').addEventListener('click', function () {
@@ -149,14 +179,14 @@
       if (routingControl) { map.removeControl(routingControl); routingControl = null; }
       if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
       if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-
+      lastUserLatLng = null; lastDestLatLng = null;
       followUser = true;
+      manualViewChange = false;
 
       if (navigator.geolocation) {
         watchId = navigator.geolocation.watchPosition(function(position) {
           const userLatLng = [position.coords.latitude, position.coords.longitude];
 
-          // Update or create user marker
           if (userMarker) userMarker.setLatLng(userLatLng);
           else userMarker = L.marker(userLatLng, {
             icon: L.icon({
@@ -165,22 +195,25 @@
             })
           }).addTo(map).bindPopup("You are here");
 
-          // Always recenter map on user during navigation
-          if (followUser) {
+          // Only recenter if user hasn't manually changed view
+          if (followUser && !manualViewChange) {
             map.setView(userLatLng, map.getZoom());
           }
 
-          // Always recalculate route from current location
+          // Only update the route if the user's position has changed significantly (less than 7m - avoids blue line "twitching")
           createRoutingControl(userLatLng, destLatLng);
         }, function(error) {
-          // Ignore errors for minimal UI
+          // No UI error message - minimal
         }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
       }
     });
 
-    // Allow user to pan/zoom, but if they move the map, stop auto-follow until navigation is restarted
+    // If user pans, disables auto-follow for map center until nav is restarted
     map.on('movestart', function() {
-      if (navStarted) followUser = false;
+      if (navStarted) {
+        manualViewChange = true;
+        followUser = false;
+      }
     });
 
     // Always allow manual zooming/panning
