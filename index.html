@@ -46,7 +46,6 @@
   <div id="top-controls">
     <select id="building-select">
       <option disabled selected value="">Select a Destination</option>
-      <!-- Only Senior High uses the routing coordinate of Bates for the blue line, but marker is at original -->
       <option value="9.649295884532481,123.86859277164733" data-routing="9.649295884532481,123.86859277164733">Bates Building</option>
       <option value="9.648274323006579,123.867375894612" data-routing="9.648274323006579,123.867375894612">Elementary Building</option>
       <option value="9.649258920201365,123.86913815071111" data-routing="9.649295884532481,123.86859277164733">Senior High School Building</option>
@@ -69,14 +68,12 @@
     let routingLatLng = null; // The coordinate used for OSRM routing
 
     // Only update route if user moves significantly (in meters)
-    // 4 feet ≈ 1.2192 meters
-    const MIN_ROUTE_UPDATE_METERS = 1.2192;
+    const MIN_ROUTE_UPDATE_METERS = 1.2192; // 4 feet
 
-    // Helper to compute distance in meters between two latlngs
     function getDistanceMeters(a, b) {
       function toRad(x) { return x * Math.PI / 180; }
       const lat1 = a[0], lon1 = a[1], lat2 = b[0], lon2 = b[1];
-      const R = 6378137; // Earth radius
+      const R = 6378137;
       const dLat = toRad(lat2 - lat1);
       const dLon = toRad(lon2 - lon1);
       const la1 = toRad(lat1);
@@ -87,7 +84,6 @@
       return R * c;
     }
 
-    // Initialize map
     const map = L.map('map', {
       zoomControl: true,
       attributionControl: false,
@@ -104,8 +100,7 @@
       maxZoom: 22,
     }).addTo(map);
 
-    function createRoutingControl(startLatLng, routingEndLatLng) {
-      // Do not update if coords are the same (prevent route jumpiness)
+    function createRoutingControl(startLatLng, routingEndLatLng, markerLatLng) {
       if (
         lastUserLatLng && lastDestLatLng &&
         getDistanceMeters(lastUserLatLng, startLatLng) < MIN_ROUTE_UPDATE_METERS &&
@@ -120,6 +115,7 @@
         map.removeControl(routingControl);
         routingControl = null;
       }
+
       routingControl = L.Routing.control({
         waypoints: [
           L.latLng(startLatLng),
@@ -135,15 +131,27 @@
         draggableWaypoints: false,
         fitSelectedRoutes: false,
         createMarker: function(i, wp, nWps) {
-          if (i === 0) return null;
+          if (i === 0) return null; // No marker for start (user marker handled separately)
           if (i === nWps - 1) {
-            // Place marker at the actual building coordinate, not the routing coordinate
-            return L.marker(destLatLng, {icon: L.icon({
-              iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
-              iconAnchor: [13,41],
-              iconSize: [25,41],
-              popupAnchor: [0,-35]
-            })}).bindPopup(currentDestinationLabel || "Destination");
+            // For Senior High School, place the marker at the ACTUAL building, not routing endpoint
+            if (
+              currentDestinationLabel === "Senior High School Building"
+              || currentDestinationLabel === "Senior High School"
+            ) {
+              return L.marker(markerLatLng, {icon: L.icon({
+                iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
+                iconAnchor: [13,41],
+                iconSize: [25,41],
+                popupAnchor: [0,-35]
+              })}).bindPopup(currentDestinationLabel);
+            } else {
+              return L.marker(wp.latLng, {icon: L.icon({
+                iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
+                iconAnchor: [13,41],
+                iconSize: [25,41],
+                popupAnchor: [0,-35]
+              })}).bindPopup(currentDestinationLabel);
+            }
           }
           return null;
         }
@@ -206,15 +214,14 @@
             map.setView(userLatLng, map.getZoom());
           }
 
-          // Route to the routingLatLng (entrance), marker at actual destLatLng
-          createRoutingControl(userLatLng, routingLatLng);
+          // Route to the routingLatLng (entrance), marker at actual destLatLng for Senior High
+          createRoutingControl(userLatLng, routingLatLng, destLatLng);
         }, function(error) {
           // No UI error message - minimal
         }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
       }
     });
 
-    // If user pans, disables auto-follow for map center until nav is restarted
     map.on('movestart', function() {
       if (navStarted) {
         manualViewChange = true;
@@ -222,7 +229,6 @@
       }
     });
 
-    // Always allow manual zooming/panning
     map.touchZoom.enable();
     map.scrollWheelZoom.enable();
     map.doubleClickZoom.enable();
