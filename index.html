@@ -4,10 +4,13 @@
   <meta charset="UTF-8">
   <title>Turn-by-Turn Navigation (OSRM Directions)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!-- Leaflet CSS/JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
   <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+
   <style>
     html, body {height: 100%; margin: 0; padding: 0;}
     body {overflow: hidden;}
@@ -31,8 +34,12 @@
     #start-nav-btn:disabled {
       background: #b0b0b0; cursor: not-allowed;
     }
-    #instructions { display: none !important; }
-    @media (max-width: 600px) { #top-controls { max-width: 95vw; } }
+    #instructions {
+      display: none !important;
+    }
+    @media (max-width: 600px) {
+      #top-controls { max-width: 95vw; }
+    }
   </style>
 </head>
 <body>
@@ -50,7 +57,26 @@
   <div id="map"></div>
   <div id="instructions"></div>
   <script>
-    let destLatLng = null, userMarker = null, watchId = null;
+    // SCHOOL BOUNDARY COORDINATES (edit as needed for your school)
+    // Example: Holy Name University (HNU) Main Campus boundary (approximate)
+    var schoolBoundary = [
+      [9.648594, 123.866420],
+      [9.648819, 123.866191],
+      [9.649299, 123.866057],
+      [9.650174, 123.866804],
+      [9.650431, 123.867535],
+      [9.650431, 123.868167],
+      [9.650331, 123.868859],
+      [9.650015, 123.869562],
+      [9.649565, 123.869750],
+      [9.648984, 123.869627],
+      [9.648669, 123.869246],
+      [9.648541, 123.868589],
+      [9.648594, 123.866420]
+    ];
+    // These coordinates should outline your school/compound area
+
+    let destLatLng = null, destMarker = null, userMarker = null, watchId = null;
     let routingControl = null;
     let navStarted = false;
     let currentDestinationLabel = "";
@@ -60,8 +86,11 @@
     let manualViewChange = false;
     let routingLatLng = null; // The coordinate used for OSRM routing
 
-    const MIN_ROUTE_UPDATE_METERS = 1.2192; // 4 feet
+    // Only update route if user moves significantly (in meters)
+    // 4 feet ≈ 1.2192 meters
+    const MIN_ROUTE_UPDATE_METERS = 1.2192;
 
+    // Helper to compute distance in meters between two latlngs
     function getDistanceMeters(a, b) {
       function toRad(x) { return x * Math.PI / 180; }
       const lat1 = a[0], lon1 = a[1], lat2 = b[0], lon2 = b[1];
@@ -71,10 +100,14 @@
       const la1 = toRad(lat1);
       const la2 = toRad(lat2);
       const aHarv = Math.sin(dLat/2)*Math.sin(dLat/2) +
-        Math.sin(dLon/2)*Math.sin(dLon/2)*Math.cos(la1)*Math.cos(la2);
+                    Math.sin(dLon/2)*Math.sin(dLon/2)*Math.cos(la1)*Math.cos(la2);
       const c = 2 * Math.atan2(Math.sqrt(aHarv), Math.sqrt(1-aHarv));
       return R * c;
     }
+
+    // Initialize map
+    // Calculate bounds from schoolBoundary
+    var schoolBounds = L.latLngBounds(schoolBoundary);
 
     const map = L.map('map', {
       zoomControl: true,
@@ -84,15 +117,27 @@
       scrollWheelZoom: true,
       doubleClickZoom: true,
       boxZoom: true,
-      keyboard: true
-    }).setView([9.649, 123.868], 17);
+      keyboard: true,
+      maxBounds: schoolBounds,     // Restrict to school bounds
+      maxBoundsViscosity: 1.0      // 1.0 = completely restricts panning outside
+    }).fitBounds(schoolBounds);
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
       maxZoom: 22,
+      minZoom: 17 // keep zoomed in to school
     }).addTo(map);
 
-    function createRoutingControl(startLatLng, routingEndLatLng, markerLatLng) {
+    // Draw school boundary polygon (optional, for visual cue)
+    var boundaryPolygon = L.polygon(schoolBoundary, {
+      color: '#007bff',
+      fillColor: '#3388ff',
+      fillOpacity: 0.08,
+      weight: 2,
+      interactive: false
+    }).addTo(map);
+
+    function createRoutingControl(startLatLng, routingEndLatLng) {
       if (
         lastUserLatLng && lastDestLatLng &&
         getDistanceMeters(lastUserLatLng, startLatLng) < MIN_ROUTE_UPDATE_METERS &&
@@ -107,7 +152,6 @@
         map.removeControl(routingControl);
         routingControl = null;
       }
-
       routingControl = L.Routing.control({
         waypoints: [
           L.latLng(startLatLng),
@@ -123,28 +167,7 @@
         draggableWaypoints: false,
         fitSelectedRoutes: false,
         createMarker: function(i, wp, nWps) {
-          if (i === 0) return null; // No marker for start (user marker handled separately)
-          if (i === nWps - 1) {
-            // For Senior High School, place marker at ACTUAL building, not at routing coordinate
-            if (
-              currentDestinationLabel === "Senior High School Building"
-            ) {
-              // The grey connector will be drawn from endpoint (Bates) to this marker (Senior High)
-              return L.marker(markerLatLng, {icon: L.icon({
-                iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
-                iconAnchor: [13,41],
-                iconSize: [25,41],
-                popupAnchor: [0,-35]
-              })}).bindPopup(currentDestinationLabel);
-            } else {
-              return L.marker(wp.latLng, {icon: L.icon({
-                iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
-                iconAnchor: [13,41],
-                iconSize: [25,41],
-                popupAnchor: [0,-35]
-              })}).bindPopup(currentDestinationLabel);
-            }
-          }
+          // Do NOT draw any marker for route end point!
           return null;
         }
       }).addTo(map);
@@ -162,9 +185,18 @@
       routingLatLng = sel.getAttribute('data-routing').split(',').map(Number);
       currentDestinationLabel = getDestinationLabel(this.value);
 
+      if (destMarker) map.removeLayer(destMarker);
+      destMarker = L.marker(destLatLng, {icon: L.icon({
+        iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
+        iconAnchor: [13,41],
+        iconSize: [25,41],
+        popupAnchor: [0,-35]
+      })}).addTo(map).bindPopup(currentDestinationLabel).openPopup();
+
       document.getElementById('start-nav-btn').disabled = false;
       navStarted = false;
-      map.setView(destLatLng, 17);
+
+      map.setView(destLatLng, Math.max(map.getZoom(), 18)); // keep zoomed in
       manualViewChange = false;
     });
 
@@ -193,17 +225,15 @@
           }).addTo(map).bindPopup("You are here");
 
           if (followUser && !manualViewChange) {
-            map.setView(userLatLng, map.getZoom());
+            map.setView(userLatLng, Math.max(map.getZoom(), 18));
           }
-
-          // Pass destLatLng as markerLatLng for correct marker placement for Senior High
-          createRoutingControl(userLatLng, routingLatLng, destLatLng);
+          createRoutingControl(userLatLng, routingLatLng);
         }, function(error) {
-          // No UI error message
         }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
       }
     });
 
+    // If user pans, disables auto-follow for map center until nav is restarted
     map.on('movestart', function() {
       if (navStarted) {
         manualViewChange = true;
@@ -211,6 +241,7 @@
       }
     });
 
+    // Always allow manual zooming/panning, but restrict to bounds
     map.touchZoom.enable();
     map.scrollWheelZoom.enable();
     map.doubleClickZoom.enable();
@@ -218,7 +249,10 @@
     map.keyboard.enable();
     if (map.tap) map.tap.enable();
     map.dragging.enable();
-    if ('ontouchstart' in window) { map.tap = true; }
+
+    if ('ontouchstart' in window) {
+      map.tap = true;
+    }
   </script>
 </body>
 </html>
