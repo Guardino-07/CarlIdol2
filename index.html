@@ -46,11 +46,12 @@
   <div id="top-controls">
     <select id="building-select">
       <option disabled selected value="">Select a Destination</option>
-      <option value="9.649295884532481,123.86859277164733">Bates Building</option>
-      <option value="9.648274323006579,123.867375894612">Elementary Building</option>
-      <option value="9.649258920201365,123.86913815071111">Senior High School Building</option>
-      <option value="9.6501393425521,123.86784628406689">College of Art Sciences Building</option>
-      <option value="9.648836069141659,123.8671386907348">Junior High School Building</option>
+      <!-- Only Bates and Senior High School use routing to Bates for blue line -->
+      <option value="9.649295884532481,123.86859277164733" data-routing="9.649295884532481,123.86859277164733">Bates Building</option>
+      <option value="9.648274323006579,123.867375894612" data-routing="9.648274323006579,123.867375894612">Elementary Building</option>
+      <option value="9.649258920201365,123.86913815071111" data-routing="9.649295884532481,123.86859277164733">Senior High School Building</option>
+      <option value="9.6501393425521,123.86784628406689" data-routing="9.6501393425521,123.86784628406689">College of Art Sciences Building</option>
+      <option value="9.648836069141659,123.8671386907348" data-routing="9.648836069141659,123.8671386907348">Junior High School Building</option>
     </select>
     <button id="start-nav-btn" disabled>START NAVIGATING</button>
   </div>
@@ -65,9 +66,11 @@
     let lastDestLatLng = null;
     let followUser = true;
     let manualViewChange = false;
+    let routingLatLng = null; // The coordinate used for OSRM routing
 
-    // Only update route if user moves significantly (meters)
-    const MIN_ROUTE_UPDATE_METERS = 7;
+    // Only update route if user moves significantly (in meters)
+    // 4 feet ≈ 1.2192 meters
+    const MIN_ROUTE_UPDATE_METERS = 1.2192;
 
     // Helper to compute distance in meters between two latlngs
     function getDistanceMeters(a, b) {
@@ -101,17 +104,17 @@
       maxZoom: 22,
     }).addTo(map);
 
-    function createRoutingControl(startLatLng, endLatLng) {
+    function createRoutingControl(startLatLng, routingEndLatLng) {
       // Do not update if coords are the same (prevent route jumpiness)
       if (
         lastUserLatLng && lastDestLatLng &&
         getDistanceMeters(lastUserLatLng, startLatLng) < MIN_ROUTE_UPDATE_METERS &&
-        getDistanceMeters(lastDestLatLng, endLatLng) < MIN_ROUTE_UPDATE_METERS
+        getDistanceMeters(lastDestLatLng, routingEndLatLng) < MIN_ROUTE_UPDATE_METERS
       ) {
         return;
       }
       lastUserLatLng = startLatLng.slice();
-      lastDestLatLng = endLatLng.slice();
+      lastDestLatLng = routingEndLatLng.slice();
 
       if (routingControl) {
         map.removeControl(routingControl);
@@ -120,7 +123,7 @@
       routingControl = L.Routing.control({
         waypoints: [
           L.latLng(startLatLng),
-          L.latLng(endLatLng)
+          L.latLng(routingEndLatLng)
         ],
         router: L.Routing.osrmv1({serviceUrl: 'https://router.project-osrm.org/route/v1'}),
         lineOptions: {
@@ -130,11 +133,12 @@
         collapsible: false,
         addWaypoints: false,
         draggableWaypoints: false,
-        fitSelectedRoutes: false, // <-- Don't force map to fit route after each update
+        fitSelectedRoutes: false,
         createMarker: function(i, wp, nWps) {
           if (i === 0) return null;
           if (i === nWps - 1) {
-            return L.marker(wp.latLng, {icon: L.icon({
+            // Place marker at the actual building coordinate, not the routing coordinate
+            return L.marker(destLatLng, {icon: L.icon({
               iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
               iconAnchor: [13,41],
               iconSize: [25,41],
@@ -152,8 +156,10 @@
     }
 
     document.getElementById('building-select').addEventListener('change', function () {
+      const sel = this.options[this.selectedIndex];
       if (!this.value) return;
       destLatLng = this.value.split(',').map(Number);
+      routingLatLng = sel.getAttribute('data-routing').split(',').map(Number);
       currentDestinationLabel = getDestinationLabel(this.value);
 
       if (destMarker) map.removeLayer(destMarker);
@@ -172,7 +178,7 @@
     });
 
     document.getElementById('start-nav-btn').addEventListener('click', function () {
-      if (!destLatLng) return;
+      if (!destLatLng || !routingLatLng) return;
       navStarted = true;
       this.blur();
 
@@ -200,8 +206,8 @@
             map.setView(userLatLng, map.getZoom());
           }
 
-          // Only update the route if the user's position has changed significantly (less than 7m - avoids blue line "twitching")
-          createRoutingControl(userLatLng, destLatLng);
+          // Route to the routingLatLng (entrance), marker at actual destLatLng
+          createRoutingControl(userLatLng, routingLatLng);
         }, function(error) {
           // No UI error message - minimal
         }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
