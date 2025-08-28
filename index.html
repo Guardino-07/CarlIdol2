@@ -2,42 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Turn-by-Turn Navigation (OSRM Directions)</title>
+  <title>Turn-by-Turn Navigation</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-
-  <!-- Leaflet CSS/JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
-  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
-
   <style>
-    html, body {height: 100%; margin: 0; padding: 0;}
-    body {overflow: hidden;}
-    #map {height: 100vh; width: 100vw;}
-    #top-controls {
-      position: absolute; z-index: 1001; left: 10px; top: 10px;
-      width: calc(100vw - 20px); max-width: 400px;
-      display: flex; flex-direction: column; gap: 8px;
+    html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+    #map { height: 100vh; width: 100vw; }
+    #top-controls, #instructions {
+      position: absolute; z-index: 1001; left: 10px;
+      background: white; border-radius: 8px; box-shadow: 0 0 10px #00000030;
+      padding: 10px; font-size: 1rem;
     }
-    #building-select {
-      padding: 10px; background: white; border-radius: 6px; border: 1px solid #aaa;
-      font-size: 1rem; max-width: 100%;
+    #top-controls { top: 10px; max-width: 400px; display: flex; flex-direction: column; gap: 8px; }
+    #instructions { bottom: 10px; right: 10px; max-height: 40vh; overflow-y: auto; word-break: break-word; }
+    select, button {
+      font-size: 1rem; padding: 10px; border-radius: 6px; border: 1px solid #aaa;
     }
-    #start-nav-btn {
-      padding: 12px 0; background: #007bff; color: white; border: none; border-radius: 4px;
-      font-size: 1rem; font-weight: bold; cursor: pointer; width: 100%;
-      box-shadow: 0 2px 8px #00000020;
-      transition: background 0.2s;
-      display: block;
+    button {
+      background: #007bff; color: white; font-weight: bold; cursor: pointer;
+      box-shadow: 0 2px 8px #00000020; border: none;
     }
-    #start-nav-btn:disabled {
-      background: #b0b0b0; cursor: not-allowed;
-    }
-    #instructions {
-      display: none !important;
-    }
+    button:disabled { background: #b0b0b0; cursor: not-allowed; }
     @media (max-width: 600px) {
+      #instructions { font-size: 1em; }
       #top-controls { max-width: 95vw; }
     }
   </style>
@@ -46,213 +33,121 @@
   <div id="top-controls">
     <select id="building-select">
       <option disabled selected value="">Select a Destination</option>
-      <option value="9.649295884532481,123.86859277164733" data-routing="9.649295884532481,123.86859277164733">Bates Building</option>
-      <option value="9.648274323006579,123.867375894612" data-routing="9.648274323006579,123.867375894612">Elementary Building</option>
-      <option value="9.649258920201365,123.86913815071111" data-routing="9.649295884532481,123.86859277164733">Senior High School Building</option>
-      <option value="9.6501393425521,123.86784628406689" data-routing="9.6501393425521,123.86784628406689">College of Art Sciences Building</option>
-      <option value="9.648836069141659,123.8671386907348" data-routing="9.648836069141659,123.8671386907348">Junior High School Building</option>
+      <option value="9.649295884532481,123.86859277164733">Bates Building</option>
+      <option value="9.648274323006579,123.867375894612">Elementary Building</option>
+      <option value="9.649258920201365,123.86913815071111">Senior High School Building</option>
+      <option value="9.6501393425521,123.86784628406689">College of Art Sciences Building</option>
+      <option value="9.648836069141659,123.8671386907348">Junior High School Building</option>
     </select>
     <button id="start-nav-btn" disabled>START NAVIGATING</button>
   </div>
   <div id="map"></div>
-  <div id="instructions"></div>
+  <div id="instructions">Select a destination above to get a blue route line from your current location.</div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    // SCHOOL BOUNDARY COORDINATES (edit as needed for your school)
-    // Example: Holy Name University (HNU) Main Campus boundary (approximate)
-    var schoolBoundary = [
-      [9.648594, 123.866420],
-      [9.648819, 123.866191],
-      [9.649299, 123.866057],
-      [9.650174, 123.866804],
-      [9.650431, 123.867535],
-      [9.650431, 123.868167],
-      [9.650331, 123.868859],
-      [9.650015, 123.869562],
-      [9.649565, 123.869750],
-      [9.648984, 123.869627],
-      [9.648669, 123.869246],
-      [9.648541, 123.868589],
-      [9.648594, 123.866420]
-    ];
-    // These coordinates should outline your school/compound area
-
-    let destLatLng = null, destMarker = null, userMarker = null, watchId = null;
-    let routingControl = null;
-    let navStarted = false;
-    let currentDestinationLabel = "";
-    let lastUserLatLng = null;
-    let lastDestLatLng = null;
-    let followUser = true;
-    let manualViewChange = false;
-    let routingLatLng = null; // The coordinate used for OSRM routing
-
-    // Only update route if user moves significantly (in meters)
-    // 4 feet ≈ 1.2192 meters
-    const MIN_ROUTE_UPDATE_METERS = 1.2192;
-
-    // Helper to compute distance in meters between two latlngs
-    function getDistanceMeters(a, b) {
-      function toRad(x) { return x * Math.PI / 180; }
-      const lat1 = a[0], lon1 = a[1], lat2 = b[0], lon2 = b[1];
-      const R = 6378137;
-      const dLat = toRad(lat2 - lat1);
-      const dLon = toRad(lon2 - lon1);
-      const la1 = toRad(lat1);
-      const la2 = toRad(lat2);
-      const aHarv = Math.sin(dLat/2)*Math.sin(dLat/2) +
-                    Math.sin(dLon/2)*Math.sin(dLon/2)*Math.cos(la1)*Math.cos(la2);
-      const c = 2 * Math.atan2(Math.sqrt(aHarv), Math.sqrt(1-aHarv));
-      return R * c;
-    }
-
-    // Initialize map
-    // Calculate bounds from schoolBoundary
-    var schoolBounds = L.latLngBounds(schoolBoundary);
-
-    const map = L.map('map', {
-      zoomControl: true,
-      attributionControl: false,
-      tap: false,
-      dragging: true,
-      scrollWheelZoom: true,
-      doubleClickZoom: true,
-      boxZoom: true,
-      keyboard: true,
-      maxBounds: schoolBounds,     // Restrict to school bounds
-      maxBoundsViscosity: 1.0      // 1.0 = completely restricts panning outside
-    }).fitBounds(schoolBounds);
-
+    const map = L.map('map').setView([9.649, 123.868], 17);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 22,
-      minZoom: 17 // keep zoomed in to school
+      maxZoom: 19,
     }).addTo(map);
 
-    // Draw school boundary polygon (optional, for visual cue)
-    var boundaryPolygon = L.polygon(schoolBoundary, {
-      color: '#007bff',
-      fillColor: '#3388ff',
-      fillOpacity: 0.08,
-      weight: 2,
-      interactive: false
-    }).addTo(map);
+    const instructionsEl = document.getElementById('instructions');
+    const startBtn = document.getElementById('start-nav-btn');
+    const selectEl = document.getElementById('building-select');
 
-    function createRoutingControl(startLatLng, routingEndLatLng) {
-      if (
-        lastUserLatLng && lastDestLatLng &&
-        getDistanceMeters(lastUserLatLng, startLatLng) < MIN_ROUTE_UPDATE_METERS &&
-        getDistanceMeters(lastDestLatLng, routingEndLatLng) < MIN_ROUTE_UPDATE_METERS
-      ) {
-        return;
-      }
-      lastUserLatLng = startLatLng.slice();
-      lastDestLatLng = routingEndLatLng.slice();
+    let destLatLng = null, destMarker = null, userMarker = null, watchId = null;
+    let routingControl = null, currentDestinationLabel = "", lastUpdateTime = 0;
 
-      if (routingControl) {
-        map.removeControl(routingControl);
-        routingControl = null;
-      }
+    function showInstructions(text) {
+      instructionsEl.innerHTML = text;
+    }
+
+    function updateDestinationMarker(latlng, label) {
+      if (destMarker) map.removeLayer(destMarker);
+      destMarker = L.marker(latlng).addTo(map).bindPopup(label).openPopup();
+    }
+
+    function updateUserMarker(latlng) {
+      if (userMarker) userMarker.setLatLng(latlng);
+      else userMarker = L.marker(latlng).addTo(map).bindPopup("You are here").openPopup();
+    }
+
+    function fitMap(userLatLng, destLatLng) {
+      const bounds = L.latLngBounds([userLatLng, destLatLng]);
+      map.fitBounds(bounds, { padding: [70, 70] });
+    }
+
+    function loadRoutingMachine(callback) {
+      if (window.L.Routing) return callback();
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js';
+      script.onload = callback;
+      document.head.appendChild(script);
+    }
+
+    function createRoute(startLatLng, endLatLng) {
+      if (routingControl) map.removeControl(routingControl);
       routingControl = L.Routing.control({
-        waypoints: [
-          L.latLng(startLatLng),
-          L.latLng(routingEndLatLng)
-        ],
-        router: L.Routing.osrmv1({serviceUrl: 'https://router.project-osrm.org/route/v1'}),
-        lineOptions: {
-          styles: [{ color: 'blue', opacity: 0.8, weight: 6 }]
-        },
+        waypoints: [L.latLng(startLatLng), L.latLng(endLatLng)],
+        router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
+        lineOptions: { styles: [{ color: 'blue', opacity: 0.8, weight: 6 }] },
+        // Set 'show' to false to hide the instructions panel
         show: false,
-        collapsible: false,
         addWaypoints: false,
         draggableWaypoints: false,
-        fitSelectedRoutes: false,
-        createMarker: function(i, wp, nWps) {
-          // Do NOT draw any marker for route end point!
-          return null;
-        }
+        fitSelectedRoutes: true,
+        // Also ensure no container is specified for instructions
+        routeWhileDragging: false,
+        createMarker: (i, wp, nWps) => i === nWps - 1 ? L.marker(wp.latLng).bindPopup(currentDestinationLabel) : null
       }).addTo(map);
+
+      routingControl.on('routesfound', e => {
+        const route = e.routes[0];
+        const duration = Math.round(route.summary.duration / 60);
+        const distance = (route.summary.distance / 1000).toFixed(2);
+        showInstructions(`Route loaded: ${distance} km, approx. ${duration} min.`);
+      });
+
+      routingControl.on('routingerror', () => {
+        showInstructions("Routing error. Please check your location and network.");
+      });
     }
 
-    function getDestinationLabel(val) {
-      const sel = document.getElementById('building-select');
-      return sel.options[sel.selectedIndex].text || "Destination";
-    }
-
-    document.getElementById('building-select').addEventListener('change', function () {
-      const sel = this.options[this.selectedIndex];
-      if (!this.value) return;
-      destLatLng = this.value.split(',').map(Number);
-      routingLatLng = sel.getAttribute('data-routing').split(',').map(Number);
-      currentDestinationLabel = getDestinationLabel(this.value);
-
-      if (destMarker) map.removeLayer(destMarker);
-      destMarker = L.marker(destLatLng, {icon: L.icon({
-        iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
-        iconAnchor: [13,41],
-        iconSize: [25,41],
-        popupAnchor: [0,-35]
-      })}).addTo(map).bindPopup(currentDestinationLabel).openPopup();
-
-      document.getElementById('start-nav-btn').disabled = false;
-      navStarted = false;
-
-      map.setView(destLatLng, Math.max(map.getZoom(), 18)); // keep zoomed in
-      manualViewChange = false;
+    selectEl.addEventListener('change', () => {
+      if (!selectEl.value) return;
+      destLatLng = selectEl.value.split(',').map(Number);
+      currentDestinationLabel = selectEl.options[selectEl.selectedIndex].text;
+      updateDestinationMarker(destLatLng, currentDestinationLabel);
+      startBtn.disabled = false;
+      showInstructions("Press <b>START NAVIGATING</b> to begin.");
+      map.setView(destLatLng, 17);
     });
 
-    document.getElementById('start-nav-btn').addEventListener('click', function () {
-      if (!destLatLng || !routingLatLng) return;
-      navStarted = true;
-      this.blur();
+    startBtn.addEventListener('click', () => {
+      if (!destLatLng) return;
+      startBtn.blur();
+      if (routingControl) map.removeControl(routingControl);
+      if (userMarker) map.removeLayer(userMarker);
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 
-      if (routingControl) { map.removeControl(routingControl); routingControl = null; }
-      if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
-      if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-      lastUserLatLng = null; lastDestLatLng = null;
-      followUser = true;
-      manualViewChange = false;
+      if (!navigator.geolocation) return showInstructions("Geolocation not supported.");
 
-      if (navigator.geolocation) {
-        watchId = navigator.geolocation.watchPosition(function(position) {
-          const userLatLng = [position.coords.latitude, position.coords.longitude];
+      showInstructions("Getting your current location...");
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const now = Date.now();
+        if (now - lastUpdateTime < 5000) return;
+        lastUpdateTime = now;
 
-          if (userMarker) userMarker.setLatLng(userLatLng);
-          else userMarker = L.marker(userLatLng, {
-            icon: L.icon({
-              iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-              iconSize: [25, 41], iconAnchor: [13, 41], popupAnchor: [0, -35]
-            })
-          }).addTo(map).bindPopup("You are here");
+        const userLatLng = [pos.coords.latitude, pos.coords.longitude];
+        updateUserMarker(userLatLng);
+        fitMap(userLatLng, destLatLng);
 
-          if (followUser && !manualViewChange) {
-            map.setView(userLatLng, Math.max(map.getZoom(), 18));
-          }
-          createRoutingControl(userLatLng, routingLatLng);
-        }, function(error) {
-        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
-      }
+        loadRoutingMachine(() => createRoute(userLatLng, destLatLng));
+      }, () => {
+        showInstructions("Location access denied or unavailable.");
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 });
     });
-
-    // If user pans, disables auto-follow for map center until nav is restarted
-    map.on('movestart', function() {
-      if (navStarted) {
-        manualViewChange = true;
-        followUser = false;
-      }
-    });
-
-    // Always allow manual zooming/panning, but restrict to bounds
-    map.touchZoom.enable();
-    map.scrollWheelZoom.enable();
-    map.doubleClickZoom.enable();
-    map.boxZoom.enable();
-    map.keyboard.enable();
-    if (map.tap) map.tap.enable();
-    map.dragging.enable();
-
-    if ('ontouchstart' in window) {
-      map.tap = true;
-    }
   </script>
 </body>
 </html>
